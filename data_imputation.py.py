@@ -1,168 +1,202 @@
 import pandas as pd
 import numpy as np
+from sklearn.experimental import enable_iterative_imputer  # Enables IterativeImputer
 from sklearn.impute import KNNImputer, IterativeImputer
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.experimental import enable_iterative_imputer
-from sklearn.utils.validation import check_is_fitted
+from sklearn.linear_model import LinearRegression
 
 class AdvancedImputer:
     """
-    A collection of advanced imputation techniques for handling missing values.
-    
-    Methods:
-    - knn_impute: K-Nearest Neighbors imputation
-    - regression_impute: Regression-based imputation
-    - random_forest_impute: Random Forest-based imputation
-    - mice_impute: Multiple Imputation by Chained Equations (MICE)
+    A collection of advanced imputation techniques for handling missing values in a pandas DataFrame.
     """
-    
+
     @staticmethod
-    def knn_impute(df, target_cols, numeric_features, n_neighbors=5, scale=True):
+    def knn_impute(df, target_col, predictor_cols, n_neighbors=5, scale=True):
         """
-        K-Nearest Neighbors imputation for specified columns.
-        
+        Imputes missing values in `target_col` using the K-Nearest Neighbors (KNN) algorithm.
+
         Parameters:
-        df (pd.DataFrame): Input DataFrame
-        target_cols (list): Columns to impute
-        numeric_features (list): Numeric features to consider for distance calculation
-        n_neighbors (int): Number of neighbors to use
-        scale (bool): Whether to scale features before imputation
-        
+        ----------
+        df : pd.DataFrame
+            Input DataFrame containing missing values.
+        target_col : str or list of str
+            The column(s) to impute.
+        predictor_cols : list of str
+            Columns to use as predictors for imputation.
+        n_neighbors : int, default=5
+            Number of neighbors to consider for KNN.
+        scale : bool, default=True
+            Whether to scale the predictor and target columns before imputation.
+
         Returns:
-        pd.DataFrame: DataFrame with imputed values
+        -------
+        pd.DataFrame
+            A DataFrame with the imputed `target_col`.
         """
         df = df.copy()
-        subset = df[numeric_features + target_cols]
-        
+        if isinstance(target_col, str):
+            target_col = [target_col]
+
+        subset = df[predictor_cols + target_col]
+
         if scale:
             scaler = StandardScaler()
-            subset_scaled = pd.DataFrame(scaler.fit_transform(subset[numeric_features]), 
-                               columns=numeric_features)
+            subset_scaled = pd.DataFrame(scaler.fit_transform(subset), columns=subset.columns)
         else:
-            subset_scaled = subset[numeric_features].copy()
-            
+            subset_scaled = subset.copy()
+
         imputer = KNNImputer(n_neighbors=n_neighbors)
-        imputed_values = imputer.fit_transform(subset_scaled.join(subset[target_cols]))
-        
-        df[target_cols] = imputed_values[:, -len(target_cols):]
+        imputed_data = imputer.fit_transform(subset_scaled)
+        imputed_df = pd.DataFrame(imputed_data, columns=subset.columns)
+
+        df[target_col] = imputed_df[target_col]
         return df
 
     @staticmethod
-    def regression_impute(df, target_col, predictor_cols, 
-                         categorical_cols=None, model_type='linear'):
+    def regression_impute(df, target_col, predictor_cols, categorical_cols=None, model_type='linear'):
         """
-        Regression-based imputation using either Linear Regression or Random Forest.
-        
+        Imputes missing values in `target_col` using a regression model.
+
         Parameters:
-        df (pd.DataFrame): Input DataFrame
-        target_col (str): Column to impute
-        predictor_cols (list): Features to use for prediction
-        categorical_cols (list): Categorical columns to encode
-        model_type (str): 'linear' or 'random_forest'
-        
+        ----------
+        df : pd.DataFrame
+            Input DataFrame containing missing values.
+        target_col : str
+            The target column to impute.
+        predictor_cols : list of str
+            Predictor features used to train the regression model.
+        categorical_cols : list of str, optional
+            List of categorical columns to encode.
+        model_type : str, default='linear'
+            The type of regression model to use: 'linear' or 'random_forest'.
+
         Returns:
-        pd.DataFrame: DataFrame with imputed values
+        -------
+        pd.DataFrame
+            A DataFrame with the imputed `target_col`.
         """
         df = df.copy()
         temp_df = df[predictor_cols + [target_col]].copy()
-        
-        # Encode categorical features
+
         if categorical_cols:
-            encoders = {}
             for col in categorical_cols:
                 le = LabelEncoder()
                 temp_df[col] = le.fit_transform(temp_df[col].astype(str))
-                encoders[col] = le
-                
-        # Split data
+
+        temp_df = temp_df.dropna(subset=predictor_cols)
+
         known = temp_df[temp_df[target_col].notna()]
         missing = temp_df[temp_df[target_col].isna()]
-        
-        if model_type == 'linear':
-            model = LinearRegression()
-        elif model_type == 'random_forest':
-            model = RandomForestRegressor()
-            
+
+        if missing.empty:
+            print(f"No missing values found in '{target_col}'.")
+            return df
+
+        model = LinearRegression() if model_type == 'linear' else RandomForestRegressor()
         model.fit(known[predictor_cols], known[target_col])
-        preds = model.predict(missing[predictor_cols])
-        
-        df.loc[missing.index, target_col] = preds
+        predictions = model.predict(missing[predictor_cols])
+
+        df.loc[missing.index, target_col] = predictions
         return df
 
     @staticmethod
-    def random_forest_impute(df, target_col, 
-                            categorical_cols=None, 
-                            estimator_type='regressor'):
+    def random_forest_impute(df, target_col, predictor_cols, categorical_cols=None, model_type='regressor'):
         """
-        Random Forest-based imputation for mixed data types.
-        
+        Imputes missing values in `target_col` using a Random Forest model.
+
         Parameters:
-        df (pd.DataFrame): Input DataFrame
-        target_col (str): Column to impute
-        categorical_cols (list): Categorical columns to encode
-        estimator_type (str): 'regressor' or 'classifier'
-        
+        ----------
+        df : pd.DataFrame
+            Input DataFrame containing missing values.
+        target_col : str
+            The target column to impute.
+        predictor_cols : list of str
+            Columns used as predictors for the Random Forest model.
+        categorical_cols : list of str, optional
+            List of categorical columns to encode before training.
+        model_type : str, default='regressor'
+            Use 'regressor' for continuous targets or 'classifier' for categorical targets.
+
         Returns:
-        pd.DataFrame: DataFrame with imputed values
+        -------
+        pd.DataFrame
+            A DataFrame with the imputed `target_col`.
         """
         df = df.copy()
         encoders = {}
-        
-        # Encode categorical columns
+
         if categorical_cols:
-            for col in categorical_cols + [target_col] if df[target_col].dtype == 'object' else categorical_cols:
+            for col in categorical_cols + ([target_col] if df[target_col].dtype == 'object' else []):
                 le = LabelEncoder()
                 df[col] = le.fit_transform(df[col].astype(str))
                 encoders[col] = le
-                
-        # Split data
+
+        df = df.dropna(subset=predictor_cols)
+
         known = df[df[target_col].notna()]
         missing = df[df[target_col].isna()]
-        
-        # Train model
-        if estimator_type == 'regressor':
-            model = RandomForestRegressor()
-        else:
-            model = RandomForestClassifier()
-            
-        model.fit(known.drop(target_col, axis=1), known[target_col])
-        preds = model.predict(missing.drop(target_col, axis=1))
-        
-        # Decode if categorical
-        df.loc[missing.index, target_col] = preds
+
+        if missing.empty:
+            print(f"No missing values found in '{target_col}'.")
+            return df
+
+        model = RandomForestRegressor() if model_type == 'regressor' else RandomForestClassifier()
+        model.fit(known[predictor_cols], known[target_col])
+        predictions = model.predict(missing[predictor_cols])
+
+        df.loc[missing.index, target_col] = predictions
+
         if target_col in encoders:
             df[target_col] = encoders[target_col].inverse_transform(df[target_col].astype(int))
-            
+
         return df
 
     @staticmethod
-    def mice_impute(df, numeric_cols, categorical_cols=None, max_iter=10):
+    def mice_impute(df, target_col=None, predictor_cols=None, categorical_cols=None,
+                    model_type='mice', max_iter=10, scale=False):
         """
-        Multiple Imputation by Chained Equations (MICE) implementation.
-        
+        Imputes missing values using MICE (Multiple Imputation by Chained Equations) via IterativeImputer.
+
         Parameters:
-        df (pd.DataFrame): Input DataFrame
-        numeric_cols (list): Numeric columns to impute
-        categorical_cols (list): Categorical columns to impute
-        max_iter (int): Number of iterations
-        
+        ----------
+        df : pd.DataFrame
+            Input DataFrame containing missing values.
+        target_col : str, optional
+            Ignored (included for consistency).
+        predictor_cols : list of str
+            Numeric columns to impute.
+        categorical_cols : list of str, optional
+            Categorical columns to impute, rounded after imputation.
+        model_type : str, default='mice'
+            Kept for interface consistency.
+        max_iter : int, default=10
+            Maximum number of imputation iterations.
+        scale : bool, default=False
+            Whether to scale data before imputation.
+
         Returns:
-        pd.DataFrame: DataFrame with imputed values
+        -------
+        pd.DataFrame
+            A DataFrame with imputed `predictor_cols` and optionally `categorical_cols`.
         """
         df = df.copy()
-        impute_cols = numeric_cols + (categorical_cols if categorical_cols else [])
-        
-        # Create initial imputation
+
+        if predictor_cols is None:
+            raise ValueError("predictor_cols must be specified.")
+
+        impute_cols = predictor_cols + (categorical_cols if categorical_cols else [])
+
+        if scale:
+            scaler = StandardScaler()
+            df[impute_cols] = scaler.fit_transform(df[impute_cols])
+
         imputer = IterativeImputer(max_iter=max_iter, random_state=0)
-        df_imputed = pd.DataFrame(imputer.fit_transform(df[impute_cols]), 
-                                columns=impute_cols)
-        
-        # Handle categorical columns
+        imputed_df = pd.DataFrame(imputer.fit_transform(df[impute_cols]), columns=impute_cols)
+
         if categorical_cols:
             for col in categorical_cols:
-                df[col] = df_imputed[col].round().astype(int)
-                
-        # Replace numeric columns
-        df[numeric_cols] = df_imputed[numeric_cols]
+                df[col] = imputed_df[col].round().astype(int)
+
+        df[predictor_cols] = imputed_df[predictor_cols]
         return df
